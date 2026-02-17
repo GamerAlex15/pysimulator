@@ -1,0 +1,406 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from 'firebase/auth';
+import { getFirestore, doc, setDoc, getDoc, collection, onSnapshot } from 'firebase/firestore';
+import { Trophy, Play, Home, Gamepad2, Rocket, Egg, User, ShieldAlert } from 'lucide-react';
+
+// --- Firebase Configuration & Initialization ---
+const firebaseConfig = JSON.parse(__firebase_config);
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'arcade-hub-pro';
+
+export default function App() {
+  const [user, setUser] = useState(null);
+  const [activeGame, setActiveGame] = useState(null); // 'egg-dash', 'star-fighter', or null
+  const [scores, setScores] = useState({ eggDash: 0, starFighter: 0 });
+  const [globalLeaderboard, setGlobalLeaderboard] = useState([]);
+  const canvasRef = useRef(null);
+  const containerRef = useRef(null);
+
+  // --- Auth & Data Lifecycle ---
+  useEffect(() => {
+    const initAuth = async () => {
+      if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+        await signInWithCustomToken(auth, __initial_auth_token);
+      } else {
+        await signInAnonymously(auth);
+      }
+    };
+    initAuth();
+    const unsubscribe = onAuthStateChanged(auth, setUser);
+    return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    if (!user) return;
+
+    // Listen to user's personal scores
+    const userDocRef = doc(db, 'artifacts', appId, 'users', user.uid, 'profile', 'stats');
+    const unsubUser = onSnapshot(userDocRef, (doc) => {
+      if (doc.exists()) setScores(doc.data());
+    }, (err) => console.error("Stats fetch error", err));
+
+    // Listen to global leaderboard (Public)
+    const publicRef = collection(db, 'artifacts', appId, 'public', 'data', 'leaderboard');
+    const unsubLeader = onSnapshot(publicRef, (snapshot) => {
+      const data = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+      setGlobalLeaderboard(data.sort((a, b) => (b.eggDash + b.starFighter) - (a.eggDash + a.starFighter)).slice(0, 5));
+    }, (err) => console.error("Leaderboard error", err));
+
+    return () => { unsubUser(); unsubLeader(); };
+  }, [user]);
+
+  const saveScore = async (game, score) => {
+    if (!user) return;
+    const newStats = { ...scores, [game]: Math.max(scores[game] || 0, score) };
+    
+    // Save to private profile
+    await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'profile', 'stats'), newStats, { merge: true });
+    
+    // Save to public leaderboard
+    await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'leaderboard', user.uid), {
+      username: `Player_${user.uid.slice(0, 4)}`,
+      ...newStats,
+      total: (newStats.eggDash || 0) + (newStats.starFighter || 0)
+    }, { merge: true });
+  };
+
+  // --- Game Engine Host Logic ---
+  useEffect(() => {
+  if (!activeGame || !containerRef.current) return;
+
+  containerRef.current.innerHTML = '';
+
+  const iframe = document.createElement('iframe');
+  iframe.style.width = '100%';
+  iframe.style.height = '100%';
+  iframe.style.border = 'none';
+  iframe.allow = 'fullscreen';
+
+  if (activeGame === 'egg-dash') {
+    iframe.src = '/games/egg-dash/index.html';
+  } else if (activeGame === 'star-fighter') {
+    iframe.src = '/games/aether-strike/index.html';
+  }
+
+  containerRef.current.appendChild(iframe);
+
+  const handleMessage = (e) => {
+    if (e.data?.type === 'SCORE') {
+      saveScore(e.data.game, e.data.value);
+    }
+  };
+
+  window.addEventListener('message', handleMessage);
+
+  return () => {
+    window.removeEventListener('message', handleMessage);
+    containerRef.current.innerHTML = '';
+  };
+}, [activeGame]);
+
+
+  return (
+    <div className="min-h-screen bg-slate-950 text-white font-sans selection:bg-cyan-500/30">
+      {/* Header */}
+      <nav className="p-4 border-b border-white/10 flex justify-between items-center bg-slate-900/50 backdrop-blur-md sticky top-0 z-50">
+        <div className="flex items-center gap-2 cursor-pointer" onClick={() => setActiveGame(null)}>
+          <div className="bg-gradient-to-br from-cyan-400 to-blue-600 p-2 rounded-lg">
+            <Gamepad2 className="w-6 h-6 text-white" />
+          </div>
+          <h1 className="text-xl font-black tracking-tighter italic">NEXUS ARCADE</h1>
+        </div>
+        
+        <div className="flex items-center gap-6">
+          <div className="hidden md:flex gap-4 text-sm font-medium opacity-70">
+            <span className="flex items-center gap-1"><Egg className="w-4 h-4 text-yellow-400"/> {scores.eggDash}m</span>
+            <span className="flex items-center gap-1"><Rocket className="w-4 h-4 text-cyan-400"/> {scores.starFighter} pts</span>
+          </div>
+          {user && (
+            <div className="flex items-center gap-2 bg-white/5 px-3 py-1.5 rounded-full border border-white/10">
+              <User className="w-4 h-4 text-blue-400"/>
+              <span className="text-xs font-mono">{user.uid.slice(0, 8)}</span>
+            </div>
+          )}
+        </div>
+      </nav>
+
+      <main className="max-w-6xl mx-auto p-6">
+        {!activeGame ? (
+          <div className="space-y-12 animate-in fade-in duration-700">
+            {/* Hero / Game Selection */}
+            <section className="grid md:grid-cols-2 gap-8">
+              {/* Card 1: Egg Dash */}
+              <div 
+                onClick={() => setActiveGame('egg-dash')}
+                className="group relative h-80 rounded-3xl overflow-hidden cursor-pointer border border-white/10 hover:border-yellow-400/50 transition-all hover:scale-[1.02] shadow-2xl"
+              >
+                <div className="absolute inset-0 bg-gradient-to-t from-black via-black/20 to-transparent z-10" />
+                <div className="absolute inset-0 bg-yellow-600/20 opacity-0 group-hover:opacity-100 transition-opacity" />
+                <div className="absolute bottom-6 left-6 z-20">
+                  <span className="bg-yellow-400 text-black text-[10px] font-bold px-2 py-0.5 rounded uppercase mb-2 inline-block">2D Physics</span>
+                  <h2 className="text-3xl font-bold">Egg Dash Deluxe</h2>
+                  <p className="text-white/60 text-sm max-w-xs">Balance the fragile payload across treacherous terrain. Don't crack!</p>
+                  <button className="mt-4 flex items-center gap-2 bg-white text-black px-6 py-2 rounded-full font-bold text-sm">
+                    <Play className="w-4 h-4 fill-current"/> Play Now
+                  </button>
+                </div>
+                <div className="absolute top-0 right-0 p-8 opacity-20 group-hover:opacity-40 transition-all group-hover:rotate-12">
+                   <Egg className="w-32 h-32 text-yellow-200" />
+                </div>
+              </div>
+
+              {/* Card 2: Star Fighter */}
+              <div 
+                onClick={() => setActiveGame('star-fighter')}
+                className="group relative h-80 rounded-3xl overflow-hidden cursor-pointer border border-white/10 hover:border-cyan-400/50 transition-all hover:scale-[1.02] shadow-2xl"
+              >
+                <div className="absolute inset-0 bg-gradient-to-t from-black via-black/20 to-transparent z-10" />
+                <div className="absolute inset-0 bg-cyan-600/20 opacity-0 group-hover:opacity-100 transition-opacity" />
+                <div className="absolute bottom-6 left-6 z-20">
+                  <span className="bg-cyan-400 text-black text-[10px] font-bold px-2 py-0.5 rounded uppercase mb-2 inline-block">3D Simulation</span>
+                  <h2 className="text-3xl font-bold">Aether Strike</h2>
+                  <p className="text-white/60 text-sm max-w-xs">Defend the orbital platform from incoming aether shards.</p>
+                  <button className="mt-4 flex items-center gap-2 bg-white text-black px-6 py-2 rounded-full font-bold text-sm">
+                    <Play className="w-4 h-4 fill-current"/> Launch Mission
+                  </button>
+                </div>
+                <div className="absolute top-0 right-0 p-8 opacity-20 group-hover:opacity-40 transition-all group-hover:-rotate-12">
+                   <Rocket className="w-32 h-32 text-cyan-200" />
+                </div>
+              </div>
+            </section>
+
+            {/* Leaderboard */}
+            <section className="bg-white/5 rounded-3xl border border-white/10 p-8">
+              <div className="flex items-center gap-3 mb-8">
+                <Trophy className="w-6 h-6 text-yellow-400" />
+                <h3 className="text-xl font-bold tracking-tight">Global Hall of Fame</h3>
+              </div>
+              <div className="grid gap-4">
+                {globalLeaderboard.length === 0 ? (
+                  <div className="text-center py-10 opacity-30 italic">Searching for legends...</div>
+                ) : globalLeaderboard.map((entry, i) => (
+                  <div key={entry.id} className="flex items-center justify-between p-4 rounded-xl bg-white/5 border border-white/5 hover:bg-white/10 transition-colors">
+                    <div className="flex items-center gap-4">
+                      <span className={`text-xl font-black w-6 ${i === 0 ? 'text-yellow-400' : 'opacity-30'}`}>{i + 1}</span>
+                      <div>
+                        <p className="font-bold">{entry.username}</p>
+                        <p className="text-xs opacity-50 uppercase tracking-widest">{entry.id === user?.uid ? 'You' : 'Champion'}</p>
+                      </div>
+                    </div>
+                    <div className="flex gap-8 items-center">
+                      <div className="text-right">
+                        <p className="text-[10px] opacity-40 uppercase">Total Score</p>
+                        <p className="text-lg font-mono text-cyan-400">{entry.total || 0}</p>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          </div>
+        ) : (
+          /* Game View */
+          <div className="relative w-full aspect-video bg-black rounded-3xl overflow-hidden border-4 border-white/10 shadow-2xl animate-in zoom-in-95 duration-500">
+            <div ref={containerRef} className="w-full h-full" />
+            
+            <button 
+              onClick={() => setActiveGame(null)}
+              className="absolute top-4 left-4 z-[100] bg-black/60 hover:bg-red-600 backdrop-blur px-4 py-2 rounded-full flex items-center gap-2 border border-white/10 transition-colors"
+            >
+              <Home className="w-4 h-4" /> Exit Game
+            </button>
+            
+            <div className="absolute top-4 right-4 z-[100] bg-black/60 backdrop-blur px-4 py-2 rounded-full flex items-center gap-4 border border-white/10">
+              <span className="text-xs font-bold text-white/50">ARCADE MODE</span>
+              <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+            </div>
+          </div>
+        )}
+      </main>
+
+      <footer className="mt-20 p-10 text-center border-t border-white/5 opacity-30 text-xs">
+        &copy; 2024 NEXUS SYSTEMS // BUILT FOR HIGH PERFORMANCE BROWSING
+      </footer>
+    </div>
+  );
+}
+
+// --- GAME MODULE 1: EGG DASH 2D ENGINE ---
+function runEggDash(canvas, container, onScore) {
+  const gameCanvas = document.createElement('canvas');
+  gameCanvas.width = container.clientWidth;
+  gameCanvas.height = container.clientHeight;
+  container.appendChild(gameCanvas);
+  const ctx = gameCanvas.getContext('2d');
+
+  let animationFrame;
+  let car = { x: 100, y: 0, vx: 0, vy: 0, angle: 0, egg: { x: 0, y: 0, in: true } };
+  let distance = 0;
+  let gravity = 0.3;
+  let friction = 0.98;
+  let keys = {};
+
+  const handleKey = (e) => { keys[e.code] = e.type === 'keydown'; };
+  window.addEventListener('keydown', handleKey);
+  window.addEventListener('keyup', handleKey);
+
+  const getH = (x) => Math.sin(x * 0.01) * 40 + Math.sin(x * 0.005) * 80 + 350;
+
+  function loop() {
+    ctx.fillStyle = '#0f172a';
+    ctx.fillRect(0, 0, gameCanvas.width, gameCanvas.height);
+
+    // Physics
+    if (keys['ArrowRight']) car.vx += 0.5;
+    if (keys['ArrowLeft']) car.vx -= 0.5;
+    car.vx *= friction;
+    car.x += car.vx;
+    car.vy += gravity;
+    car.y += car.vy;
+
+    const groundY = getH(car.x);
+    if (car.y > groundY - 20) {
+      car.y = groundY - 20;
+      car.vy *= -0.2;
+      const angle = Math.atan2(getH(car.x + 5) - getH(car.x - 5), 10);
+      car.angle = angle;
+    }
+
+    distance = Math.max(distance, Math.floor(car.x / 10));
+
+    // Draw Terrain
+    ctx.fillStyle = '#1e293b';
+    ctx.beginPath();
+    ctx.moveTo(0, gameCanvas.height);
+    for(let i=0; i<gameCanvas.width; i+=10) {
+      ctx.lineTo(i, getH(i + (car.x - 200)));
+    }
+    ctx.lineTo(gameCanvas.width, gameCanvas.height);
+    ctx.fill();
+
+    // Draw Car
+    ctx.save();
+    ctx.translate(200, car.y - (getH(car.x) - 350));
+    ctx.rotate(car.angle);
+    ctx.fillStyle = '#3b82f6';
+    ctx.fillRect(-20, -10, 40, 15);
+    ctx.fillStyle = '#facc15';
+    ctx.beginPath(); ctx.arc(0, -15, 8, 0, Math.PI*2); ctx.fill();
+    ctx.restore();
+
+    // UI
+    ctx.fillStyle = 'white';
+    ctx.font = 'bold 20px sans-serif';
+    ctx.fillText(`Distance: ${distance}m`, 20, 80);
+
+    animationFrame = requestAnimationFrame(loop);
+  }
+
+  loop();
+
+  return () => {
+    cancelAnimationFrame(animationFrame);
+    window.removeEventListener('keydown', handleKey);
+    window.removeEventListener('keyup', handleKey);
+    onScore(distance);
+  };
+}
+
+// --- GAME MODULE 2: STAR FIGHTER 3D ENGINE ---
+function runStarFighter(container, onScore) {
+  // Check for existing Three.js
+  if (!window.THREE) {
+    const script = document.createElement('script');
+    script.src = 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js';
+    document.head.appendChild(script);
+  }
+
+  const width = container.clientWidth;
+  const height = container.clientHeight;
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(75, width / height, 0.1, 1000);
+  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setSize(width, height);
+  container.appendChild(renderer.domElement);
+
+  // Lighting
+  const ambient = new THREE.AmbientLight(0x404040);
+  scene.add(ambient);
+  const point = new THREE.PointLight(0x00ffff, 1, 100);
+  scene.add(point);
+
+  // Player Ship
+  const shipGeo = new THREE.ConeGeometry(0.5, 2, 8);
+  const shipMat = new THREE.MeshStandardMaterial({ color: 0x00ccff, emissive: 0x003344 });
+  const ship = new THREE.Mesh(shipGeo, shipMat);
+  ship.rotation.x = Math.PI / 2;
+  scene.add(ship);
+
+  camera.position.z = 10;
+  camera.position.y = 2;
+  camera.lookAt(ship.position);
+
+  // Enemies/Asteroids
+  const asteroids = [];
+  const spawnAsteroid = () => {
+    const geo = new THREE.IcosahedronGeometry(Math.random() * 0.5 + 0.2, 0);
+    const mat = new THREE.MeshStandardMaterial({ color: 0x555555 });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.set((Math.random() - 0.5) * 20, (Math.random() - 0.5) * 10, -50);
+    scene.add(mesh);
+    asteroids.push(mesh);
+  };
+
+  let score = 0;
+  let mouse = { x: 0, y: 0 };
+  const onMouseMove = (e) => {
+    const rect = container.getBoundingClientRect();
+    mouse.x = ((e.clientX - rect.left) / width) * 2 - 1;
+    mouse.y = -((e.clientY - rect.top) / height) * 2 + 1;
+  };
+  container.addEventListener('mousemove', onMouseMove);
+
+  let animationFrame;
+  function animate() {
+    animationFrame = requestAnimationFrame(animate);
+    
+    // Ship Movement
+    ship.position.x += (mouse.x * 10 - ship.position.x) * 0.1;
+    ship.position.y += (mouse.y * 5 - ship.position.y) * 0.1;
+    ship.rotation.z = -mouse.x * 0.5;
+
+    // Asteroids
+    if (Math.random() > 0.9) spawnAsteroid();
+    asteroids.forEach((a, i) => {
+      a.position.z += 0.4;
+      a.rotation.x += 0.02;
+      
+      // Collision (simplified)
+      if (a.position.distanceTo(ship.position) < 1) {
+        score -= 5;
+        a.position.z = 100; // Trash it
+      }
+
+      if (a.position.z > 10) {
+        scene.remove(a);
+        asteroids.splice(i, 1);
+        score += 1;
+      }
+    });
+
+    renderer.render(scene, camera);
+  }
+
+  animate();
+
+  return () => {
+    cancelAnimationFrame(animationFrame);
+    container.removeEventListener('mousemove', onMouseMove);
+    onScore(score);
+    renderer.dispose();
+  };
+}

@@ -1,0 +1,577 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Egg Dash Deluxe</title>
+    <style>
+        :root {
+            --bg-color: #a0e9ff;
+            --ground-color: #4CAF50;
+            --accent-color: #ffeb3b;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background-color: var(--bg-color);
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            touch-action: none;
+            user-select: none;
+        }
+
+        #game-container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        canvas {
+            display: block;
+            max-width: 100%;
+            max-height: 100%;
+            background: linear-gradient(to bottom, #87CEEB 0%, #E0F7FA 100%);
+        }
+
+        #ui-overlay {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            pointer-events: none;
+            color: #333;
+            text-shadow: 1px 1px 0px white;
+        }
+
+        .stat-box {
+            font-size: 24px;
+            font-weight: bold;
+            margin-bottom: 5px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        #menu-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.4);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            color: white;
+            z-index: 10;
+        }
+
+        .menu-card {
+            background: white;
+            padding: 40px;
+            border-radius: 30px;
+            text-align: center;
+            color: #333;
+            box-shadow: 0 15px 40px rgba(0,0,0,0.4);
+            max-width: 400px;
+            width: 80%;
+        }
+
+        h1 { margin-top: 0; color: #ff9800; font-size: 42px; letter-spacing: -1px; }
+
+        button {
+            background: #ff9800;
+            border: none;
+            padding: 15px 40px;
+            font-size: 24px;
+            color: white;
+            border-radius: 50px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: transform 0.1s, background 0.2s;
+            box-shadow: 0 6px 0 #e68a00;
+            width: 100%;
+            margin-top: 10px;
+        }
+
+        button:active {
+            transform: translateY(3px);
+            box-shadow: 0 3px 0 #e68a00;
+        }
+
+        .controls-hint {
+            margin-top: 25px;
+            color: #888;
+            font-size: 14px;
+            line-height: 1.5;
+        }
+
+        .hidden { display: none !important; }
+        
+        .coin-icon {
+            width: 24px;
+            height: 24px;
+            background: #FFD700;
+            border-radius: 50%;
+            border: 2px solid #DAA520;
+            display: inline-block;
+        }
+    </style>
+</head>
+<body>
+
+<div id="game-container">
+    <canvas id="gameCanvas"></canvas>
+    
+    <div id="ui-overlay">
+        <div class="stat-box">Distance: <span id="distance-val">0</span>m</div>
+        <div class="stat-box">Best: <span id="best-val">0</span>m</div>
+        <div class="stat-box"><div class="coin-icon"></div> <span id="coin-val">0</span></div>
+    </div>
+
+    <div id="menu-overlay">
+        <div class="menu-card" id="start-card">
+            <h1>EGG DASH</h1>
+            <p>Don't let the egg tumble out!</p>
+            <button id="start-btn">GO!</button>
+            <div class="controls-hint">
+                <b>PC:</b> Arrow Keys or A/D<br>
+                <b>Mobile:</b> Touch Left/Right
+            </div>
+        </div>
+        
+        <div class="menu-card hidden" id="gameover-card">
+            <h1 style="color: #f44336;">CRACKED!</h1>
+            <div style="font-size: 20px; margin-bottom: 20px;">
+                <p>Distance: <span id="final-dist">0</span>m</p>
+                <p>Coins: <span id="final-coins">0</span></p>
+            </div>
+            <button id="restart-btn">PLAY AGAIN</button>
+        </div>
+    </div>
+</div>
+
+<script>
+/**
+ * EGG DASH DELUXE - Improved Physics & Visuals
+ */
+
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+const distanceEl = document.getElementById('distance-val');
+const bestEl = document.getElementById('best-val');
+const coinEl = document.getElementById('coin-val');
+const finalDistEl = document.getElementById('final-dist');
+const finalCoinEl = document.getElementById('final-coins');
+const menuOverlay = document.getElementById('menu-overlay');
+const startCard = document.getElementById('start-card');
+const gameoverCard = document.getElementById('gameover-card');
+
+// Constants
+const GRAVITY = 0.28;
+const FRICTION = 0.985;
+const ACCEL = 0.22;
+const MAX_SPEED = 12;
+
+let width, height;
+let highScore = localStorage.getItem('eggDashBest') || 0;
+bestEl.innerText = highScore;
+
+let gameState = 'MENU';
+let cameraX = 0;
+let distance = 0;
+let coinsCollected = 0;
+let keys = {};
+let particles = [];
+let coins = [];
+let scenery = [];
+
+// Car Object
+const car = {
+    x: 100,
+    y: 0,
+    vx: 0,
+    vy: 0,
+    angle: 0,
+    va: 0,
+    egg: {
+        x: 0,
+        y: 0,
+        vx: 0,
+        vy: 0,
+        va: 0,
+        angle: 0,
+        radius: 12,
+        isLost: false,
+        inSeat: true
+    },
+    wheels: [
+        { offsetX: -28, offsetY: 18, radius: 14, angle: 0 },
+        { offsetX: 28, offsetY: 18, radius: 14, angle: 0 }
+    ]
+};
+
+function resize() {
+    width = window.innerWidth;
+    height = window.innerHeight;
+    canvas.width = width;
+    canvas.height = height;
+}
+window.addEventListener('resize', resize);
+resize();
+
+// Input
+window.addEventListener('keydown', e => keys[e.code] = true);
+window.addEventListener('keyup', e => keys[e.code] = false);
+let touchInput = 0;
+window.addEventListener('touchstart', e => { touchInput = e.touches[0].clientX < width / 2 ? -1 : 1; });
+window.addEventListener('touchend', () => touchInput = 0);
+
+function getTerrainHeight(x) {
+    return Math.sin(x * 0.005) * 60 + 
+           Math.sin(x * 0.012) * 35 + 
+           Math.sin(x * 0.001) * 120 + 
+           height * 0.75;
+}
+
+function getTerrainAngle(x) {
+    const step = 2;
+    return Math.atan2(getTerrainHeight(x + step) - getTerrainHeight(x - step), step * 2);
+}
+
+function initGame() {
+    gameState = 'PLAYING';
+    cameraX = 0;
+    distance = 0;
+    coinsCollected = 0;
+    coinEl.innerText = '0';
+    particles = [];
+    
+    // Create some initial coins and trees
+    coins = [];
+    scenery = [];
+    for(let i=1; i<20; i++) spawnWorldFeatures(i * 400);
+
+    car.x = 200;
+    car.y = getTerrainHeight(200) - 100;
+    car.vx = 0; car.vy = 0; car.angle = 0; car.va = 0;
+    
+    car.egg.isLost = false;
+    car.egg.inSeat = true;
+    car.egg.x = car.x;
+    car.egg.y = car.y - 20;
+    car.egg.vx = 0; car.egg.vy = 0; car.egg.va = 0; car.egg.angle = 0;
+    
+    menuOverlay.classList.add('hidden');
+}
+
+function spawnWorldFeatures(startX) {
+    // Coins
+    for(let j=0; j<3; j++) {
+        const cx = startX + Math.random() * 200;
+        coins.push({ x: cx, y: getTerrainHeight(cx) - 60 - Math.random()*40, collected: false });
+    }
+    // Trees
+    scenery.push({ 
+        x: startX + Math.random()*300, 
+        y: 0, 
+        type: Math.random() > 0.5 ? 'tree' : 'bush',
+        scale: 0.8 + Math.random() * 0.5
+    });
+}
+
+function createParticle(x, y, color) {
+    particles.push({
+        x, y,
+        vx: (Math.random() - 0.5) * 2,
+        vy: (Math.random() - 0.5) * 2,
+        life: 1.0,
+        color
+    });
+}
+
+function gameOver() {
+    gameState = 'GAMEOVER';
+    finalDistEl.innerText = Math.floor(distance);
+    finalCoinEl.innerText = coinsCollected;
+    if (distance > highScore) {
+        highScore = Math.floor(distance);
+        localStorage.setItem('eggDashBest', highScore);
+        bestEl.innerText = highScore;
+    }
+    menuOverlay.classList.remove('hidden');
+    startCard.classList.add('hidden');
+    gameoverCard.classList.remove('hidden');
+}
+
+function update() {
+    if (gameState !== 'PLAYING') return;
+
+    let move = 0;
+    if (keys['ArrowRight'] || keys['KeyD'] || touchInput === 1) move = 1;
+    if (keys['ArrowLeft'] || keys['KeyA'] || touchInput === -1) move = -1;
+
+    // Car Physics
+    car.vx += move * ACCEL;
+    car.vx = Math.max(-MAX_SPEED, Math.min(MAX_SPEED, car.vx));
+    car.vx *= FRICTION;
+    car.x += car.vx;
+    car.vy += GRAVITY;
+    car.y += car.vy;
+
+    // Exhaust particles
+    if (Math.abs(car.vx) > 1 && Math.random() > 0.7) {
+        const ex = car.x - Math.cos(car.angle) * 40;
+        const ey = car.y + Math.sin(car.angle) * 10;
+        createParticle(ex, ey, 'rgba(200,200,200,0.5)');
+    }
+
+    let onGround = false;
+    car.wheels.forEach(w => {
+        const wx = car.x + Math.cos(car.angle) * w.offsetX - Math.sin(car.angle) * w.offsetY;
+        const wy = car.y + Math.sin(car.angle) * w.offsetX + Math.cos(car.angle) * w.offsetY;
+        const groundY = getTerrainHeight(wx) - w.radius;
+        
+        if (wy > groundY) {
+            const bounce = (wy - groundY);
+            car.y -= bounce * 0.4;
+            car.vy -= bounce * 0.15;
+            car.vy *= 0.7;
+            onGround = true;
+            w.angle += car.vx * 0.15;
+            const tAngle = getTerrainAngle(wx);
+            car.va += (tAngle - car.angle) * 0.04;
+        }
+    });
+
+    car.va *= 0.92;
+    car.angle += car.va;
+
+    // EGG PHYSICS - High Realism
+    if (car.egg.inSeat) {
+        // Seat coordinates
+        const sX = car.x - Math.sin(car.angle) * 5;
+        const sY = car.y - 12 - Math.cos(car.angle) * 8;
+        
+        // Match car but with local "wobble"
+        car.egg.x = sX;
+        car.egg.y = sY;
+        car.egg.angle = car.angle;
+
+        // Ejection logic: Check forces
+        // If centrifugal force or sharp tilt happens, egg pops out
+        const centrifugal = Math.abs(car.va) * Math.abs(car.vx);
+        const pitchLimit = Math.abs(car.angle) > 0.8; // Too steep
+        
+        // Pop out condition
+        if (centrifugal > 0.15 || (pitchLimit && Math.abs(car.vx) > 2) || (car.vy < -5 && !onGround)) {
+            car.egg.inSeat = false;
+            car.egg.vx = car.vx + (Math.random() - 0.5) * 5;
+            car.egg.vy = car.vy - 4;
+            car.egg.va = (Math.random() - 0.5) * 0.5;
+        }
+    } else {
+        // Falling/Rolling egg
+        car.egg.vy += GRAVITY;
+        car.egg.vx *= 0.99;
+        car.egg.x += car.egg.vx;
+        car.egg.y += car.egg.vy;
+        car.egg.angle += car.egg.va;
+
+        const egY = getTerrainHeight(car.egg.x) - car.egg.radius;
+        if (car.egg.y > egY) {
+            car.egg.y = egY;
+            car.egg.vy *= -0.5; // Bounce
+            car.egg.va = car.egg.vx * 0.1; // Roll
+            car.egg.vx *= 0.9;
+            
+            // If it hits hard or stays away from car too long, game over
+            if (!car.egg.isLost) {
+                car.egg.isLost = true;
+                setTimeout(gameOver, 1200);
+            }
+        }
+    }
+
+    // Camera & Distance
+    cameraX += (car.x - cameraX - width * 0.25) * 0.1;
+    distance = Math.max(distance, (car.x - 200) / 50);
+    distanceEl.innerText = Math.floor(distance);
+
+    // Coins & Scenery Spawning
+    if (car.x > scenery[scenery.length-1].x - 1000) {
+        spawnWorldFeatures(scenery[scenery.length-1].x + 400);
+    }
+
+    // Coin collection
+    coins.forEach(c => {
+        if (!c.collected && Math.hypot(car.x - c.x, car.y - c.y) < 50) {
+            c.collected = true;
+            coinsCollected++;
+            coinEl.innerText = coinsCollected;
+            for(let i=0; i<8; i++) createParticle(c.x, c.y, '#FFD700');
+        }
+    });
+
+    // Cleanup offscreen
+    particles = particles.filter(p => {
+        p.x += p.vx; p.y += p.vy; p.life -= 0.02;
+        return p.life > 0;
+    });
+
+    if (car.y > height + 400) gameOver();
+}
+
+function draw() {
+    ctx.clearRect(0, 0, width, height);
+
+    // Clouds
+    ctx.fillStyle = "rgba(255,255,255,0.7)";
+    for(let i=0; i<5; i++) {
+        let cx = ((i * 400 - cameraX * 0.1) % (width + 400)) - 200;
+        if (cx < -200) cx += width + 400;
+        ctx.beginPath();
+        ctx.arc(cx, 100 + i*20, 30, 0, Math.PI*2);
+        ctx.arc(cx+25, 110 + i*20, 25, 0, Math.PI*2);
+        ctx.arc(cx-20, 115 + i*20, 20, 0, Math.PI*2);
+        ctx.fill();
+    }
+
+    // Back Hills
+    drawHills(0.2, '#b3e5fc', 100);
+    
+    // Scenery (Trees)
+    scenery.forEach(s => {
+        const screenX = s.x - cameraX;
+        if (screenX > -100 && screenX < width + 100) {
+            const groundY = getTerrainHeight(s.x);
+            ctx.save();
+            ctx.translate(screenX, groundY);
+            ctx.scale(s.scale, s.scale);
+            if (s.type === 'tree') {
+                ctx.fillStyle = '#795548';
+                ctx.fillRect(-5, -20, 10, 20);
+                ctx.fillStyle = '#2E7D32';
+                ctx.beginPath();
+                ctx.moveTo(0, -50); ctx.lineTo(20, -15); ctx.lineTo(-20, -15); ctx.fill();
+            } else {
+                ctx.fillStyle = '#43A047';
+                ctx.beginPath();
+                ctx.arc(0, -5, 15, 0, Math.PI*2); ctx.arc(10, -10, 10, 0, Math.PI*2); ctx.arc(-10, -10, 10, 0, Math.PI*2);
+                ctx.fill();
+            }
+            ctx.restore();
+        }
+    });
+
+    // Coins
+    coins.forEach(c => {
+        if (!c.collected) {
+            ctx.fillStyle = '#FFD700';
+            ctx.strokeStyle = '#DAA520';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.arc(c.x - cameraX, c.y + Math.sin(Date.now()*0.005)*5, 10, 0, Math.PI*2);
+            ctx.fill();
+            ctx.stroke();
+        }
+    });
+
+    // Main Ground
+    ctx.fillStyle = '#4CAF50';
+    ctx.beginPath();
+    ctx.moveTo(0, height);
+    for (let i = -40; i <= width + 40; i += 15) {
+        ctx.lineTo(i, getTerrainHeight(i + cameraX));
+    }
+    ctx.lineTo(width, height);
+    ctx.fill();
+
+    // Car
+    ctx.save();
+    ctx.translate(car.x - cameraX, car.y);
+    ctx.rotate(car.angle);
+    // Body - Truck Style
+    ctx.fillStyle = '#3F51B5';
+    ctx.beginPath();
+    ctx.roundRect(-45, -8, 90, 22, 4);
+    ctx.fill();
+    // Cabin
+    ctx.fillStyle = '#5C6BC0';
+    ctx.beginPath();
+    ctx.moveTo(0, -8); ctx.lineTo(15, -25); ctx.lineTo(35, -25); ctx.lineTo(40, -8);
+    ctx.fill();
+    // Bed / Tray
+    ctx.strokeStyle = '#283593';
+    ctx.lineWidth = 3;
+    ctx.strokeRect(-42, -15, 40, 10);
+    // Wheels
+    car.wheels.forEach(w => {
+        ctx.save();
+        ctx.translate(w.offsetX, w.offsetY);
+        ctx.rotate(w.angle);
+        ctx.fillStyle = '#222';
+        ctx.beginPath(); ctx.arc(0, 0, w.radius, 0, Math.PI*2); ctx.fill();
+        ctx.strokeStyle = '#666'; ctx.lineWidth = 3;
+        ctx.beginPath(); ctx.moveTo(-w.radius, 0); ctx.lineTo(w.radius, 0); ctx.stroke();
+        ctx.restore();
+    });
+    ctx.restore();
+
+    // Egg
+    ctx.save();
+    ctx.translate(car.egg.x - cameraX, car.egg.y);
+    ctx.rotate(car.egg.angle);
+    ctx.fillStyle = '#FFF9C4';
+    ctx.beginPath();
+    ctx.ellipse(0, 0, car.egg.radius * 0.85, car.egg.radius, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#F0E68C'; ctx.lineWidth = 1; ctx.stroke();
+    ctx.restore();
+
+    // Particles
+    particles.forEach(p => {
+        ctx.globalAlpha = p.life;
+        ctx.fillStyle = p.color;
+        ctx.beginPath(); ctx.arc(p.x - cameraX, p.y, 4 * p.life, 0, Math.PI*2); ctx.fill();
+    });
+    ctx.globalAlpha = 1;
+
+    requestAnimationFrame(() => { update(); draw(); });
+}
+
+function drawHills(speed, color, offset) {
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.moveTo(0, height);
+    for (let i = -40; i <= width + 40; i += 40) {
+        const y = Math.sin((i + cameraX * speed) * 0.002) * 40 + height * 0.7 + offset;
+        ctx.lineTo(i, y);
+    }
+    ctx.lineTo(width, height);
+    ctx.fill();
+}
+
+document.getElementById('start-btn').onclick = initGame;
+document.getElementById('restart-btn').onclick = initGame;
+draw();
+
+// Polyfill
+if (!Path2D.prototype.roundRect) {
+    CanvasRenderingContext2D.prototype.roundRect = function (x, y, w, h, r) {
+        if (w < 2 * r) r = w / 2; if (h < 2 * r) r = h / 2;
+        this.moveTo(x + r, y);
+        this.arcTo(x + w, y, x + w, y + h, r);
+        this.arcTo(x + w, y + h, x, y + h, r);
+        this.arcTo(x, y + h, x, y, r);
+        this.arcTo(x, y, x + w, y, r);
+        this.closePath(); return this;
+    };
+}
+</script>
+</body>
+</html>
